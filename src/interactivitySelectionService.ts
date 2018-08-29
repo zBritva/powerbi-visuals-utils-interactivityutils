@@ -23,9 +23,17 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  *  THE SOFTWARE.
  */
-import { shapesInterfaces } from "powerbi-visuals-utils-svgutils";
-import { arrayExtensions } from "powerbi-visuals-utils-typeutils";
+import { shapesInterfaces } from "powerbi-visuals-utils-svgutils/lib";
+import { arrayExtensions } from "powerbi-visuals-utils-typeutils/lib";
 import { AppliedFilter } from "./interfaces";
+
+import {
+    SelectableDataPoint,
+    InteractivityBaseService,
+    IBehaviorOptions,
+    IInteractivityService,
+    ISelectionHandler
+} from "./interactivityBaseService";
 
 // powerbi.extensibility
 import powerbi from "powerbi-visuals-api";
@@ -44,7 +52,7 @@ import ArrayExtensions = arrayExtensions.ArrayExtensions;
 // powerbi.extensibility.utils.svg
 import BoundingRect = shapesInterfaces.BoundingRect;
 
-export interface SelectableDataPoint {
+export interface SelectionDataPoint extends SelectableDataPoint {
     selected: boolean;
     /** Identity for identifying the selectable data point for selection purposes */
     identity: ExtensibilityISelectionId;
@@ -59,8 +67,8 @@ export interface SelectableDataPoint {
 /**
  * Factory method to create an IInteractivityService instance.
  */
-export function createInteractivityService(hostServices: IVisualHost): IInteractivityService {
-    return new InteractivityService(hostServices);
+export function createInteractivitySelectionService(hostServices: IVisualHost): IInteractivityService<SelectionDataPoint> {
+    return new InteractivitySelectionService (hostServices);
 }
 
 /**
@@ -162,7 +170,7 @@ export interface IExtensibilityMeasuredSelecionId extends ExtensibilityISelectio
 export function checkDatapointAgainstSelectedIds(dataPoint: SelectableDataPoint, selectedIds: ISelectionId[]) {
     return selectedIds.some((selectionId) => {
         const measuredSelectionId: IMeasuredSelectionId = selectionId as IMeasuredSelectionId;
-        const otherSelectionId: IExtensibilityMeasuredSelecionId = dataPoint.identity as IExtensibilityMeasuredSelecionId;
+        const otherSelectionId: IExtensibilityMeasuredSelecionId = (dataPoint as SelectionDataPoint).identity as IExtensibilityMeasuredSelecionId;
         // if the first selectionId is built only from measures then compare measures
         if (!measuredSelectionId.dataMap && measuredSelectionId.compareMeasures(measuredSelectionId.measures, otherSelectionId.measures)) {
             return true;
@@ -185,22 +193,19 @@ export function checkDatapointAgainstSelectedIds(dataPoint: SelectableDataPoint,
     });
 }
 
-export class InteractivityService implements IInteractivityService, ISelectionHandler {
+export class InteractivitySelectionService  extends InteractivityBaseService<SelectionDataPoint, IBehaviorOptions<SelectionDataPoint>>  implements IInteractivityService<SelectionDataPoint>, ISelectionHandler {
     private selectionManager: ISelectionManager;
 
     // References
-    private renderSelectionInVisual = () => { };
-    private renderSelectionInLegend = () => { };
-    private renderSelectionInLabels = () => { };
+    protected renderSelectionInVisual = () => { };
+    protected renderSelectionInLegend = () => { };
+    protected renderSelectionInLabels = () => { };
 
     // Selection state
     private selectedIds: ISelectionId[] = [];
-    private isInvertedSelectionMode: boolean = false;
-    public selectableDataPoints: SelectableDataPoint[];
-    public selectableLegendDataPoints: SelectableDataPoint[];
-    public selectableLabelsDataPoints: SelectableDataPoint[];
-
+    protected isInvertedSelectionMode: boolean = false;
     constructor(hostServices: IVisualHost) {
+        super();
         this.selectionManager = hostServices.createSelectionManager();
 
         if (this.selectionManager.registerOnSelectCallback) {
@@ -210,52 +215,12 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
         }
     }
 
-    // IInteractivityService Implementation
-    /** Binds the visual to the interactivityService */
-    public bind(dataPoints: SelectableDataPoint[], behavior: IInteractiveBehavior, behaviorOptions: any, options?: InteractivityServiceOptions): void {
-        // Bind the data
-        if (options && options.overrideSelectionFromData) {
-            // Override selection state from data points if needed
-            this.takeSelectionStateFromDataPoints(dataPoints);
-        }
-
-        if (options) {
-            if (options.isLegend) {
-                // Bind to legend data instead of normal data if isLegend
-                this.selectableLegendDataPoints = dataPoints;
-                this.renderSelectionInLegend = () => behavior.renderSelection(this.legendHasSelection());
-            }
-            else if (options.isLabels) {
-                // Bind to label data instead of normal data if isLabels
-                this.selectableLabelsDataPoints = dataPoints;
-                this.renderSelectionInLabels = () => behavior.renderSelection(this.labelsHasSelection());
-            }
-            else {
-                this.selectableDataPoints = dataPoints;
-                this.renderSelectionInVisual = () => behavior.renderSelection(this.hasSelection());
-            }
-        }
-        else {
-            this.selectableDataPoints = dataPoints;
-            this.renderSelectionInVisual = () => behavior.renderSelection(this.hasSelection());
-        }
-
-        behavior.bindEvents(behaviorOptions, this);
-        // Sync data points with current selection state
-        this.syncSelectionState();
-    }
-
-    private clearSelectedIds(): void {
-        ArrayExtensions.clear(this.selectedIds);
-    }
-
     /**
      * Sets the selected state of all selectable data points to false and invokes the behavior's select command.
      */
     public clearSelection(): void {
-        this.clearSelectedIds();
-        this.applyToAllSelectableDataPoints((dataPoint: SelectableDataPoint) => dataPoint.selected = false);
-        this.renderAll();
+        ArrayExtensions.clear(this.selectedIds);
+        super.clearSelection();
     }
 
     public applySelectionStateToData(dataPoints: SelectableDataPoint[], hasHighlights?: boolean): boolean {
@@ -348,11 +313,11 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
         }
 
         if (this.selectableDataPoints) {
-            InteractivityService.updateSelectableDataPointsBySelectedIds(this.selectableDataPoints, this.selectedIds);
+            InteractivitySelectionService .updateSelectableDataPointsBySelectedIds(this.selectableDataPoints, this.selectedIds);
         }
 
         if (this.selectableLegendDataPoints) {
-            InteractivityService.updateSelectableDataPointsBySelectedIds(this.selectableLegendDataPoints, this.selectedIds);
+            InteractivitySelectionService .updateSelectableDataPointsBySelectedIds(this.selectableLegendDataPoints, this.selectedIds);
         }
 
         if (this.selectableLabelsDataPoints) {
@@ -387,24 +352,17 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
         }
     }
 
-    // Private utility methods
-    private renderAll(): void {
-        this.renderSelectionInVisual();
-        this.renderSelectionInLegend();
-        this.renderSelectionInLabels();
-    }
-
     /** Marks a data point as selected and syncs selection with the host. */
-    private select(dataPoints: SelectableDataPoint | SelectableDataPoint[], multiSelect: boolean): void {
+    protected select(dataPoints: SelectableDataPoint | SelectableDataPoint[], multiSelect: boolean): void {
         const selectableDataPoints: SelectableDataPoint[] = [].concat(dataPoints);
 
         const originalSelectedIds = [...this.selectedIds];
 
         if (!multiSelect || !selectableDataPoints.length) {
-            this.clearSelectedIds();
+            ArrayExtensions.clear(this.selectedIds);
         }
 
-        selectableDataPoints.forEach((dataPoint: SelectableDataPoint) => {
+        selectableDataPoints.forEach((dataPoint: SelectionDataPoint) => {
             const shouldDataPointBeSelected: boolean = !checkDatapointAgainstSelectedIds(dataPoint, originalSelectedIds);
 
             this.selectSingleDataPoint(dataPoint, shouldDataPointBeSelected);
@@ -413,7 +371,7 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
         this.syncSelectionState();
     }
 
-    private selectSingleDataPoint(dataPoint: SelectableDataPoint, shouldDataPointBeSelected: boolean): void {
+    private selectSingleDataPoint(dataPoint: SelectionDataPoint, shouldDataPointBeSelected: boolean): void {
         if (!dataPoint || !dataPoint.identity) {
             return;
         }
@@ -446,7 +404,7 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
         }
     }
 
-    private sendSelectionToHost() {
+    protected sendSelectionToHost() {
         if (!this.selectionManager) {
             return;
         }
@@ -458,7 +416,7 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
         }
     }
 
-    private takeSelectionStateFromDataPoints(dataPoints: SelectableDataPoint[]): void {
+    protected takeSelectionStateFromDataPoints(dataPoints: SelectableDataPoint[]): void {
         let selectedIds: ISelectionId[] = this.selectedIds;
 
         // Replace the existing selectedIds rather than merging.
@@ -466,30 +424,7 @@ export class InteractivityService implements IInteractivityService, ISelectionHa
 
         for (let dataPoint of dataPoints) {
             if (dataPoint.selected) {
-                selectedIds.push(dataPoint.identity as ISelectionId);
-            }
-        }
-    }
-
-    private applyToAllSelectableDataPoints(action: (selectableDataPoint: SelectableDataPoint) => void) {
-        let selectableDataPoints = this.selectableDataPoints;
-        let selectableLegendDataPoints = this.selectableLegendDataPoints;
-        let selectableLabelsDataPoints = this.selectableLabelsDataPoints;
-        if (selectableDataPoints) {
-            for (let dataPoint of selectableDataPoints) {
-                action(dataPoint);
-            }
-        }
-
-        if (selectableLegendDataPoints) {
-            for (let dataPoint of selectableLegendDataPoints) {
-                action(dataPoint);
-            }
-        }
-
-        if (selectableLabelsDataPoints) {
-            for (let dataPoint of selectableLabelsDataPoints) {
-                action(dataPoint);
+                selectedIds.push((dataPoint as SelectionDataPoint).identity as ISelectionId);
             }
         }
     }
